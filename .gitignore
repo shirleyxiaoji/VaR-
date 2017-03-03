@@ -1,33 +1,125 @@
-# History files
-.Rhistory
-.Rapp.history
+setwd("C:/Users/xiaoji/Downloads/HW2")
 
-# Session Data files
-.RData
 
-# Example code in package build process
-*-Ex.R
+#9/1/16 data
+aaplclosingp = 106.73  #in us dollar
+msftclosingp = 57.59   #in us dollar
 
-# Output files from R CMD build
-/*.tar.gz
 
-# Output files from R CMD check
-/*.Rcheck/
+#historical data
+data = read.csv('APPL_MSFT_Price_Data.csv')
 
-# RStudio files
-.Rproj.user/
+head(data)
+tail(data)
+data = data[1:254,]
 
-# produced vignettes
-vignettes/*.html
-vignettes/*.pdf
+str(data)
+summary(data)
 
-# OAuth2 token, see https://github.com/hadley/httr/releases/tag/v0.3
-.httr-oauth
+#get stock daily log returns from stock  price as in df
 
-# knitr and R markdown default cache directories
-/*_cache/
-/cache/
+for(i in 1:(length(data)-1)){
+  data[i+1,4] = log(data[i+1,2])-log(data[i,2]) 
+  data[i+1,5] = log(data[i+1,3])-log(data[i,3]) 
+  
+}
 
-# Temporary files created by R markdown
-*.utf8.md
-*.knit.md
+df = data[2:254,c(1,4:5)]
+colnames(df) = c("Date","AAPL.Logreturn","MSFT.Logreturn")
+
+##################################    EWMA #############################################
+
+#obtain the empirical mean vector and covariance matrix for the return data
+#that is mu_0 and sigma_0
+hismean.logreturn = c(mean(df$AAPL.Logreturn),mean(df$MSFT.Logreturn))
+hiscov.logreturn = var(df[, 2:3])
+
+#using the empirical/historical mean and covariance matrix as our
+#initial values for the EWMA mean and covariance. Then, as we go 
+#through the data(oldest to newest), update the mean and cov mattix
+#via the EWMA updating procedure. We will end up with the EWMA estimates
+#for the mean and cov matrix as of the ending date 9/1/16.
+
+EWMAmean.logreturn = df
+colnames(EWMAmean.logreturn) = c("Date","AAPL.EWMAmean.Logreturn","MSFT.EWMAmean.Logreturn")
+
+hiscov.logreturn = as.matrix(hiscov.logreturn)
+EWMAcov.logreturn = hiscov.logreturn
+
+
+lambda = .97
+#get the first value of mean (that is mu_1)
+EWMAmean.logreturn[1,2:3] = lambda*hismean.logreturn +(1-lambda)*df[1,2:3] 
+#get the first value of cov matrix (that is sigma_1)
+EWMAcov.logreturn = lambda*hiscov.logreturn +(1-lambda)*t(as.matrix(df[1,2:3]-EWMAmean.logreturn[1,2:3]))%*%as.matrix(df[1,2:3]-EWMAmean.logreturn[1,2:3])
+
+## get the EWMA mean and cov matrix as 8/31/16
+for(i in 1:(length(df$Date)-1)){
+  
+  EWMAmean.logreturn[i+1,2:3] = lambda*EWMAmean.logreturn[i,2:3] + (1-lambda)*df[i+1,2:3] #get the EWMA mean mu_t
+  EWMAcov.logreturn = lambda*EWMAcov.logreturn + (1-lambda)*t(as.matrix(df[i+1,2:3]-EWMAmean.logreturn[i+1,2:3]))%*%as.matrix(df[i+1,2:3]-EWMAmean.logreturn[i+1,2:3])
+}
+
+##get empirical mean as 1/9/16
+logreturn.1916 = c( log(aaplclosingp) - log(data[254,2]), log(msftclosingp) - log(data[254,3]))
+
+#get the EWMA mean and cov matrix as 1/9/16
+EWMAmean.1916 =  lambda*EWMAmean.logreturn[253,2:3] + (1-lambda)*logreturn.1916
+EWMAcov.1916 = lambda*EWMAcov.logreturn + (1-lambda)*t(as.matrix(logreturn.1916-EWMAmean.1916))%*%as.matrix(logreturn.1916-EWMAmean.1916)
+
+################################################################################################
+
+aaplmarketcap = 575.11 
+msftmarketcap = 448.77 
+
+portfoliovalue = 1000000
+
+aaplweight = aaplmarketcap/(msftmarketcap+aaplmarketcap)
+msftweight = msftmarketcap/(msftmarketcap+aaplmarketcap)
+
+##dollar amount for aapl and msft
+
+portfoliodollarvector = data.frame(portfoliovalue * c(aaplweight, msftweight))
+rownames(portfoliodollarvector) = c('aapldollar', 'msftdollar')
+
+alpha =.95
+
+##historical distribution
+aapl.logreturn = c(df$AAPL.Logreturn, logreturn.1916[1])
+msft.logreturn = c(df$MSFT.Logreturn, logreturn.1916[2])
+
+portlossempvalues = - portfoliovalue *(aaplweight * (exp(aapl.logreturn) - 1) + msftweight * ( exp(msft.logreturn) -1))
+empVaR = quantile(portlossempvalues, alpha)
+
+##variance/covariance method
+#assuming the log returns are normally distributed with (EWMAmean, EWMAcov)
+
+numrun = 10000
+require(stats)
+
+set.seed(204)
+
+#the normal random samples of the log returns using EWMA mean and covariance matrix
+
+aaplEWMA.randomsamples = rnorm(numrun, mean = EWMAmean.1916$AAPL.EWMAmean.Logreturn, sd = EWMAcov.1916[1,1])
+msftEWMA.randomsamples = rnorm(numrun, mean = EWMAmean.1916$MSFT.EWMAmean.Logreturn, sd = EWMAcov.1916[2,2])
+
+portlossEWMANormalvalues = - portfoliovalue *( aaplweight * (exp(aaplEWMA.randomsamples) - 1) + msftweight * ( exp(msftEWMA.randomsamples) -1) )
+EWMANormalVaR = quantile(portlossEWMANormalvalues, alpha)
+
+##variance/covariance method
+#assuming the log returns are normally distributed with (empmean, empcov)
+aaplemp.randomsamples = rnorm(numrun, mean = mean(df$AAPL.Logreturn), sd = var(df$AAPL.Logreturn))
+msftemp.randomsamples = rnorm(numrun, mean = mean(df$MSFT.Logreturn), sd = var(df$MSFT.Logreturn))
+
+portlossemprandomvalues = - portfoliovalue *( aaplweight * (exp(aaplemp.randomsamples) - 1) + msftweight * ( exp(msftemp.randomsamples) -1))
+emprandomVaR = quantile(portlossemprandomvalues, alpha)
+
+print(c(alpha,"% condidence value at Risk Estimators:"))
+
+print(c("From empirical distribution: $" , empVaR))
+print(c("From normal distribution with historical mean/covariance: $" , emprandomVaR))
+print(c("From normal distribution with exponentially weighted mean/covariance: $" , EWMANormalVaR))
+
+
+
